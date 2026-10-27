@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>필지맵</title>
+<meta name="description" content="브이월드 연속지적도로 필지 경계와 토지정보를 확인하는 지도 서비스">
+<meta name="theme-color" content="#FBFCFC" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#161C1B" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 26 26'%3E%3Crect x='1.5' y='1.5' width='23' height='23' rx='5' fill='white' stroke='%23C23452' stroke-width='1.6'/%3E%3Cpath d='M1.5 10.5h23M10 1.5v9M16.5 10.5v14M1.5 17.5h15' fill='none' stroke='%23C23452' stroke-width='1.6'/%3E%3Crect x='10' y='10.5' width='6.5' height='7' fill='%231D4ED8'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="./" aria-label="필지맵 처음으로">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><rect x="1.5" y="1.5" width="23" height="23" rx="5" fill="none" stroke="var(--cad)" stroke-width="1.6"/><path d="M1.5 10.5h23M10 1.5v9M16.5 10.5v14M1.5 17.5h15" fill="none" stroke="var(--cad)" stroke-width="1.6"/><rect x="10" y="10.5" width="6.5" height="7" fill="var(--accent)" opacity=".85"/></svg>
+    <span>필지맵</span>
+  </a>
+  <span class="chip" id="sourceChip"><b>브이월드</b> 연속지적도</span>
+  <div class="search" role="search">
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M11 11l3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+    <input id="q" type="search" autocomplete="off" placeholder="지번·도로명 주소 검색 (예: 성수동2가 273)" aria-label="주소 검색" aria-controls="results">
+    <ul id="results" class="results" role="listbox" hidden></ul>
+  </div>
+</header>
+
+<div class="main">
+  <div class="map-wrap">
+    <div id="map" aria-label="지도. 끌어서 이동, 휠이나 두 손가락으로 확대, 필지를 눌러 선택"></div>
+    <div class="toolbar">
+      <div class="seg" role="group" aria-label="배경지도">
+        <button type="button" data-base="Base" aria-pressed="true">일반</button>
+        <button type="button" data-base="white" aria-pressed="false">백지도</button>
+        <button type="button" data-base="midnight" aria-pressed="false">야간</button>
+        <button type="button" data-base="Satellite" aria-pressed="false">위성</button>
+      </div>
+      <div class="toggles">
+        <button type="button" class="toggle" id="tCad" aria-pressed="true"><span class="box"></span>지적도</button>
+        <button type="button" class="toggle" id="tZone" aria-pressed="false"><span class="box"></span>용도지역</button>
+        <button type="button" class="toggle" id="tMulti" aria-pressed="false"><span class="box"></span>여러 필지 선택</button>
+      </div>
+    </div>
+    <div class="notice" id="notice" role="status" hidden><span id="noticeText"></span><button type="button" id="noticeAct" class="notice-act" hidden></button><button type="button" class="notice-x" id="noticeX" aria-label="알림 닫기">×</button></div>
+    <div class="ctrls">
+      <button type="button" id="zin" aria-label="확대"><svg width="14" height="14" viewBox="0 0 14 14"><path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
+      <button type="button" id="zout" aria-label="축소"><svg width="14" height="14" viewBox="0 0 14 14"><path d="M1 7h12" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
+      <button type="button" id="locate" aria-label="내 위치로 이동"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="4.5"/><circle cx="8" cy="8" r="1.4" fill="currentColor"/><path d="M8 0.8v2.4M8 12.8v2.4M0.8 8h2.4M12.8 8h2.4" stroke-linecap="round"/></svg></button>
+    </div>
+    <div class="busy" id="busy" hidden><span class="spin"></span>필지를 찾는 중</div>
+  </div>
+  <aside class="sheet" id="sheet" aria-live="polite">
+    <div class="sheet-in">
+      <div id="sel"></div>
+      <p class="note">지적 경계, 지번, 공시지가는 <a href="https://www.vworld.kr" target="_blank" rel="noopener">브이월드(국토교통부 공간정보 오픈플랫폼)</a> 오픈API에서 가져옵니다. 연속지적도는 참고용 도면이라 법적 효력이 없으며, 정확한 면적과 경계는 토지대장과 지적도 등본으로 확인하세요.</p>
+    </div>
+  </aside>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="js/config.js"></script>
+<script src="js/vworld.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
