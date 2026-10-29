@@ -116,8 +116,10 @@ function watchTiles(layer) {
   return layer;
 }
 const NATIVE = { Base: 19, Satellite: 19, Hybrid: 19, white: 18, midnight: 18 };
+// 확대·축소 애니메이션 중에는 중간 단계 타일을 받지 않고, 화면 밖 타일을 넉넉히 남겨 둡니다.
+const TILE_OPTS = { updateWhenZooming: false, keepBuffer: 4 };
 function makeBase(name) {
-  const tile = (n, ext) => watchTiles(L.tileLayer(V.wmtsUrl(n, ext), { maxNativeZoom: NATIVE[n], maxZoom: 20, minZoom: 6, attribution: ATTR }));
+  const tile = (n, ext) => watchTiles(L.tileLayer(V.wmtsUrl(n, ext), Object.assign({ maxNativeZoom: NATIVE[n], maxZoom: 20, minZoom: 6, attribution: ATTR }, TILE_OPTS)));
   if (name === 'Satellite') return L.layerGroup([tile('Satellite', 'jpeg'), tile('Hybrid', 'png')]);
   return tile(name, 'png');
 }
@@ -131,11 +133,14 @@ function setBase(name) {
   try { localStorage.setItem('pilji-base', name); } catch (e) { /* 저장 생략 */ }
 }
 
+// WMS는 서버가 그림을 매번 새로 그리므로 느립니다. 512px 타일로 요청 수를 1/4로 줄이고,
+// 지도가 멈춘 뒤에만 요청합니다.
 function wms(layers, opts) {
   return watchTiles(L.tileLayer.wms(V.wmsUrl, Object.assign({
     layers, styles: layers, format: 'image/png', transparent: 'TRUE', version: '1.3.0',
+    tileSize: 512, updateWhenIdle: true,
     maxZoom: 20, key: V.key, domain: V.domain, attribution: ATTR
-  }, opts)));
+  }, TILE_OPTS, opts)));
 }
 const CAD_MIN_ZOOM = 15;
 const cadLayer = V.hasKey ? wms('lp_pa_cbnd_bubun,lp_pa_cbnd_bonbun', { pane: 'cadPane', minZoom: CAD_MIN_ZOOM }) : null;
@@ -152,6 +157,18 @@ if (V.hasKey) {
   }).addTo(map);
   document.querySelectorAll('[data-base], #tCad, #tZone').forEach((b) => { b.disabled = true; b.setAttribute('aria-pressed', 'false'); });
   $('#sourceChip').innerHTML = '<b>인증키 필요</b> 배경지도만 표시 중';
+}
+
+// 멀리 갈 때 flyTo는 여러 확대 단계를 거치며 타일을 잔뜩 받아 버벅입니다.
+// 지금 화면 근처면 짧게 날아가고, 멀면 바로 옮깁니다.
+function moveTo(latlng, zoom) {
+  const near = map.getBounds().pad(1.5).contains(latlng) && Math.abs(map.getZoom() - zoom) <= 3;
+  if (near && !reduceMotion) map.flyTo(latlng, zoom, { duration: 0.6 });
+  else map.setView(latlng, zoom, { animate: false });
+}
+function moveToBounds(bounds) {
+  const z = Math.min(map.getBoundsZoom(bounds, false, L.point(120, 120)), 19);
+  moveTo(bounds.getCenter(), z);
 }
 
 map.on('moveend', () => {
@@ -194,7 +211,7 @@ $('#zout').addEventListener('click', () => map.zoomOut());
 $('#locate').addEventListener('click', () => {
   if (!navigator.geolocation) { notify('이 브라우저는 위치 찾기를 지원하지 않습니다.'); return; }
   navigator.geolocation.getCurrentPosition(
-    (p) => map.flyTo([p.coords.latitude, p.coords.longitude], 18, { animate: !reduceMotion }),
+    (p) => moveTo(L.latLng(p.coords.latitude, p.coords.longitude), 18),
     () => notify('내 위치를 가져오지 못했습니다. 브라우저의 위치 권한을 확인하세요.', { timeout: 5000 }),
     { enableHighAccuracy: true, timeout: 10000 }
   );
@@ -213,11 +230,8 @@ function accentStyle() {
 map.on('click', (e) => {
   if (!V.hasKey) { notify('필지를 고르려면 먼저 브이월드 인증키를 넣어 주세요.', { timeout: 4000 }); return; }
   const additive = multi || e.originalEvent.shiftKey || e.originalEvent.metaKey || e.originalEvent.ctrlKey;
-  if (map.getZoom() < 15) {
-    map.flyTo(e.latlng, 17, { animate: !reduceMotion });
-    map.once('moveend', () => pickAt(e.latlng, additive));
-    return;
-  }
+  // 지도 이동과 필지 조회를 동시에 시작해 기다리는 시간을 줄입니다.
+  if (map.getZoom() < 15) moveTo(e.latlng, 17);
   pickAt(e.latlng, additive);
 });
 
@@ -273,7 +287,7 @@ function afterChange() {
   } catch (e) { /* 주소 갱신 생략 */ }
 }
 function focusItem(it) {
-  map.flyToBounds(it.layer.getBounds(), { padding: [60, 60], maxZoom: 19, animate: !reduceMotion });
+  moveToBounds(it.layer.getBounds());
 }
 
 /* ───────── 정보 패널 ───────── */
@@ -442,9 +456,8 @@ function choose(r) {
   qEl.value = r.title;
   qEl.blur();
   const ll = L.latLng(r.lat, r.lng);
-  const go = () => pickAt(ll, multi);
-  if (reduceMotion) { map.setView(ll, 18); go(); }
-  else { map.flyTo(ll, 18); map.once('moveend', go); }
+  moveTo(ll, 18);
+  pickAt(ll, multi);
 }
 qEl.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 350); });
 qEl.addEventListener('keydown', (e) => {

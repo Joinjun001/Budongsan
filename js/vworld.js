@@ -47,6 +47,13 @@
         finish();
         reject(new VWorldError('NETWORK', '브이월드에 요청을 보내지 못했습니다.'));
       };
+      // 스크립트를 다 실행했는데 콜백이 불리지 않았다면 JSONP로 응답하지 않은 것입니다.
+      // 시간 초과를 기다리지 않고 바로 실패로 처리합니다.
+      script.onload = () => {
+        if (settled) return;
+        finish();
+        reject(new VWorldError('NO_CALLBACK', '브이월드가 JSONP 형식으로 응답하지 않았습니다.'));
+      };
       script.src = API + path + '?' + qs.toString();
       document.head.appendChild(script);
     });
@@ -104,10 +111,19 @@
 
   // 토지특성정보 (국가중점데이터 API). JSONP 지원이 확인되지 않아 실패할 수 있으며,
   // 실패하면 화면은 연속지적도 값과 도형으로 계산한 면적을 대신 보여 줍니다.
+  let nedUnsupported = false;
   async function landCharacteristics(pnu) {
-    const data = await jsonp('/ned/data/getLandCharacteristics', {
-      pnu, format: 'json', numOfRows: '20', pageNo: '1'
-    }, 7000);
+    if (nedUnsupported) throw new VWorldError('NO_CALLBACK', '토지특성정보는 브라우저에서 받을 수 없습니다.');
+    let data;
+    try {
+      data = await jsonp('/ned/data/getLandCharacteristics', {
+        pnu, format: 'json', numOfRows: '20', pageNo: '1'
+      }, 7000);
+    } catch (err) {
+      // JSONP를 지원하지 않으면 이후 필지에서는 요청 자체를 건너뜁니다.
+      if (err.code === 'NO_CALLBACK') nedUnsupported = true;
+      throw err;
+    }
     const lc = data && data.landCharacteristicss;
     if (!lc) throw new VWorldError('BAD_RESPONSE', '토지특성정보 응답을 읽지 못했습니다.');
     let rows = lc.field || [];
@@ -120,30 +136,34 @@
     return rows[0];
   }
 
-  // 주소 검색 (req/search). 지번 주소 → 도로명 주소 → 장소 순서로 찾아봅니다.
-  async function search(query) {
-    const base = {
+  // 주소 검색 (req/search). 지번 주소와 도로명 주소를 동시에 찾고, 둘 다 없으면 장소를 찾습니다.
+  const searchCache = new Map();
+  async function searchOne(query, t) {
+    const res = unwrap(await jsonp('/req/search', Object.assign({
       service: 'search', request: 'search', version: '2.0', crs: 'EPSG:4326',
       size: '8', page: '1', query, format: 'json', errorFormat: 'json'
-    };
-    const tries = [
-      { type: 'address', category: 'parcel' },
-      { type: 'address', category: 'road' },
-      { type: 'place' }
-    ];
-    for (const t of tries) {
-      const res = unwrap(await jsonp('/req/search', Object.assign({}, base, t), 8000));
-      const items = res && res.items ? res.items : [];
-      if (items.length) {
-        return items.map((it) => ({
-          kind: t.type === 'place' ? 'place' : t.category,
-          title: t.type === 'place' ? it.title : (t.category === 'parcel' ? it.address.parcel : it.address.road),
-          sub: t.type === 'place' ? (it.address && (it.address.road || it.address.parcel)) : (t.category === 'parcel' ? it.address.road : it.address.parcel),
-          lng: Number(it.point.x), lat: Number(it.point.y)
-        }));
-      }
-    }
-    return [];
+    }, t), 8000));
+    const items = res && res.items ? res.items : [];
+    return items.map((it) => ({
+      kind: t.type === 'place' ? 'place' : t.category,
+      title: t.type === 'place' ? it.title : (t.category === 'parcel' ? it.address.parcel : it.address.road),
+      sub: t.type === 'place' ? (it.address && (it.address.road || it.address.parcel)) : (t.category === 'parcel' ? it.address.road : it.address.parcel),
+      lng: Number(it.point.x), lat: Number(it.point.y)
+    }));
+  }
+  async function search(query) {
+    if (searchCache.has(query)) return searchCache.get(query);
+    const [parcel, road] = await Promise.allSettled([
+      searchOne(query, { type: 'address', category: 'parcel' }),
+      searchOne(query, { type: 'address', category: 'road' })
+    ]);
+    let found = [];
+    if (parcel.status === 'fulfilled' && parcel.value.length) found = parcel.value;
+    else if (road.status === 'fulfilled' && road.value.length) found = road.value;
+    else if (parcel.status === 'rejected' && road.status === 'rejected') throw parcel.reason;
+    else found = await searchOne(query, { type: 'place' });
+    searchCache.set(query, found);
+    return found;
   }
 
   function wmtsUrl(layer, ext) {
